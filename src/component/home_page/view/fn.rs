@@ -90,11 +90,13 @@ pub(crate) fn docs_home_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
                     }
                 }
             }
-            if { !page.html.is_empty() } {
+            if { !page.blocks.is_empty() } {
                 article {
                     class: c_docs_md_body()
                     class: "md-body"
-                    inner_html: page.html
+                    {
+                        render_md_blocks(page.blocks)
+                    }
                 }
             }
             if { !footer_text.is_empty() } {

@@ -127,7 +127,9 @@ pub(crate) fn docs_doc_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
                 article {
                     class: c_docs_md_body()
                     class: "md-body"
-                    inner_html: page.html
+                    {
+                        render_md_blocks(page.blocks)
+                    }
                 }
                 div {
                     class: c_docs_prev_next()

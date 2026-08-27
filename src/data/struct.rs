@@ -38,8 +38,8 @@ pub struct DocsPage {
     pub locale: &'static str,
     /// Page title.
     pub title: &'static str,
-    /// Rendered HTML body.
-    pub html: &'static str,
+    /// Content block AST (rendered to VirtualNodes at runtime).
+    pub blocks: &'static [DocsBlock],
     /// Anchor TOC entries.
     pub headings: &'static [DocsHeading],
     /// Whether this is a home page.
@@ -116,4 +116,101 @@ pub struct DocsSite {
     pub locales: &'static [DocsLocale],
     /// All pages.
     pub pages: &'static [DocsPage],
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Markdown block / inline AST
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// One block-level markdown node.
+#[derive(Clone, Copy, Debug)]
+pub enum DocsBlock {
+    /// `<h1>`–`<h6>`; `href` is the full `#<route>#<slug>` permalink.
+    Heading {
+        /// Heading level (1–6).
+        level: u8,
+        /// Slug id used for anchor scrolling.
+        id: &'static str,
+        /// Full permalink href.
+        href: &'static str,
+        /// Inline content.
+        inline: &'static [DocsInline],
+    },
+    /// A paragraph.
+    Paragraph(&'static [DocsInline]),
+    /// A fenced code block.
+    CodeBlock {
+        /// Fence info string (language).
+        lang: &'static str,
+        /// Raw code.
+        code: &'static str,
+    },
+    /// A block quote.
+    BlockQuote(&'static [DocsBlock]),
+    /// An ordered or unordered list.
+    List {
+        /// Ordered list flag.
+        ordered: bool,
+        /// List items.
+        items: &'static [&'static [DocsBlock]],
+    },
+    /// A GFM table.
+    Table {
+        /// Header cells.
+        head: &'static [&'static [DocsInline]],
+        /// Body rows.
+        rows: &'static [&'static [&'static [DocsInline]]],
+    },
+    /// A `:::` custom container.
+    Container {
+        /// Container kind (tip / warning / danger / …).
+        kind: &'static str,
+        /// Title label.
+        title: &'static str,
+        /// Inner blocks.
+        blocks: &'static [DocsBlock],
+    },
+    /// A thematic break (`<hr>`).
+    Rule,
+    /// A raw HTML block (escape hatch, rendered via `inner_html`).
+    Html(&'static str),
+}
+
+/// One inline markdown node.
+#[derive(Clone, Copy, Debug)]
+pub enum DocsInline {
+    /// Plain text.
+    Text(&'static str),
+    /// Bold.
+    Strong(&'static [DocsInline]),
+    /// Italic.
+    Em(&'static [DocsInline]),
+    /// Strikethrough.
+    Del(&'static [DocsInline]),
+    /// Inline code.
+    Code(&'static str),
+    /// A link (internal hash route or external URL).
+    Link {
+        /// Resolved href.
+        href: &'static str,
+        /// External link flag (opens in a new tab).
+        external: bool,
+        /// Link text.
+        children: &'static [DocsInline],
+    },
+    /// An image.
+    Image {
+        /// Image URL.
+        src: &'static str,
+        /// Alt text.
+        alt: &'static str,
+    },
+    /// A task-list checkbox marker.
+    TaskMarker(bool),
+    /// A soft line break.
+    SoftBreak,
+    /// A hard line break.
+    HardBreak,
+    /// Raw inline HTML (escape hatch).
+    Html(&'static str),
 }
