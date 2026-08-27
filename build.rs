@@ -1,0 +1,1404 @@
+//! Build script for euv-docs.
+//!
+//! Scans the `docs/` directory, parses `docs/config.toml` plus every
+//! `**/*.md` file (frontmatter + VuePress-flavored markdown) into a typed
+//! block/inline AST, and generates `docs_gen.rs` into `OUT_DIR`. The
+//! generated file constructs a single `DocsSite` static consumed by the
+//! WASM app at runtime — no markdown parsing or HTML string patching
+//! happens in the browser; every page renders as native euv VirtualNodes
+//! so the framework's fine-grained diffing applies.
+
+use std::{
+    collections::{HashSet, VecDeque},
+    env, fs,
+    path::{Component, Path, PathBuf},
+};
+
+use {
+    pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd},
+    serde::Deserialize,
+    serde_yaml::Value as Yaml,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Config schema (docs/config.toml)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Root of `docs/config.toml`.
+#[derive(Debug, Deserialize)]
+struct Config {
+    /// `[site]` table.
+    site: SiteConfig,
+    /// `[[locales]]` array.
+    locales: Vec<LocaleConfig>,
+}
+
+/// `[site]` table.
+#[derive(Debug, Deserialize)]
+struct SiteConfig {
+    /// Site title shown in the navbar.
+    title: String,
+    /// Site description (meta).
+    description: Option<String>,
+    /// Emoji / short logo text in the navbar.
+    logo: Option<String>,
+}
+
+/// One `[[locales]]` entry.
+#[derive(Debug, Deserialize)]
+struct LocaleConfig {
+    /// Route prefix, e.g. `/` or `/zh/`.
+    prefix: String,
+    /// BCP-47 language tag.
+    lang: String,
+    /// Human label in the language dropdown, e.g. `简体中文`.
+    label: String,
+    /// Locale-specific site title override.
+    title: Option<String>,
+    /// Locale-specific description override.
+    description: Option<String>,
+    /// Footer text for this locale.
+    footer: Option<String>,
+    /// Right TOC title label (default `On this page`).
+    toc_label: Option<String>,
+    /// Prev-page link label (default `Previous`).
+    prev_label: Option<String>,
+    /// Next-page link label (default `Next`).
+    next_label: Option<String>,
+    /// Navbar items for this locale.
+    navbar: Option<Vec<NavItemConfig>>,
+}
+
+/// One navbar item.
+#[derive(Debug, Deserialize, Clone)]
+struct NavItemConfig {
+    /// Display text.
+    text: String,
+    /// Link target (`/guide/` internal or `https://…` external).
+    link: String,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Page / sidebar / AST model (build-time)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A heading extracted for the right-side anchor TOC.
+#[derive(Debug, Clone)]
+struct Heading {
+    /// 2 or 3.
+    level: u8,
+    /// Slug used as the element id.
+    id: String,
+    /// Plain text content.
+    text: String,
+}
+
+/// A build-time block node (mirrors `crate::data::DocsBlock`).
+#[derive(Debug, Clone)]
+enum Block {
+    /// Heading with slug and permalink.
+    Heading {
+        /// Level 1–6.
+        level: u8,
+        /// Slug id.
+        id: String,
+        /// Full `#<route>#<slug>` href.
+        href: String,
+        /// Inline content.
+        inline: Vec<Inline>,
+    },
+    /// Paragraph.
+    Paragraph(Vec<Inline>),
+    /// Fenced code block.
+    CodeBlock {
+        /// Language tag.
+        lang: String,
+        /// Raw code.
+        code: String,
+    },
+    /// Block quote.
+    BlockQuote(Vec<Block>),
+    /// List.
+    List {
+        /// Ordered flag.
+        ordered: bool,
+        /// Items (each a block list).
+        items: Vec<Vec<Block>>,
+    },
+    /// GFM table.
+    Table {
+        /// Header cells.
+        head: Vec<Vec<Inline>>,
+        /// Body rows.
+        rows: Vec<Vec<Vec<Inline>>>,
+    },
+    /// Custom container.
+    Container {
+        /// Kind.
+        kind: String,
+        /// Title label.
+        title: String,
+        /// Inner blocks.
+        blocks: Vec<Block>,
+    },
+    /// Thematic break.
+    Rule,
+    /// Raw HTML block.
+    Html(String),
+}
+
+/// A build-time inline node (mirrors `crate::data::DocsInline`).
+#[derive(Debug, Clone)]
+enum Inline {
+    /// Plain text.
+    Text(String),
+    /// Bold.
+    Strong(Vec<Inline>),
+    /// Italic.
+    Em(Vec<Inline>),
+    /// Strikethrough.
+    Del(Vec<Inline>),
+    /// Inline code.
+    Code(String),
+    /// Link.
+    Link {
+        /// Resolved href.
+        href: String,
+        /// External flag.
+        external: bool,
+        /// Link text.
+        children: Vec<Inline>,
+    },
+    /// Image.
+    Image {
+        /// URL.
+        src: String,
+        /// Alt text.
+        alt: String,
+    },
+    /// Task-list checkbox.
+    TaskMarker(bool),
+    /// Soft break.
+    SoftBreak,
+    /// Hard break.
+    HardBreak,
+    /// Raw inline HTML.
+    Html(String),
+}
+
+/// A parsed markdown page.
+#[derive(Debug)]
+struct Page {
+    /// Full route, e.g. `/guide/getting-started.html` or `/zh/`.
+    route: String,
+    /// Locale prefix this page belongs to.
+    locale: String,
+    /// Page title (frontmatter `title` or first heading).
+    title: String,
+    /// Content block AST.
+    blocks: Vec<Block>,
+    /// Anchor TOC entries (h2/h3).
+    headings: Vec<Heading>,
+    /// Home page flag (frontmatter `home: true`).
+    home: bool,
+    /// Hero text (home pages).
+    hero_text: String,
+    /// Tagline (home pages).
+    tagline: String,
+    /// Hero actions.
+    actions: Vec<(String, String, String)>,
+    /// Feature cards.
+    features: Vec<(String, String)>,
+    /// Frontmatter footer override.
+    footer: String,
+    /// Frontmatter `order` (sidebar sorting).
+    order: i64,
+}
+
+/// A sidebar tree node.
+#[derive(Debug)]
+struct SideItem {
+    /// Display text.
+    text: String,
+    /// Optional link route (group index or leaf page).
+    link: Option<String>,
+    /// Nested children (non-empty → group).
+    children: Vec<SideItem>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Entry
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Entry point of the build script.
+fn main() {
+    let manifest_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let docs_dir: PathBuf = manifest_dir.join("docs");
+    let out_dir: String = env::var("OUT_DIR").expect("OUT_DIR");
+
+    println!("cargo:rerun-if-changed=docs");
+
+    let config_raw: String =
+        fs::read_to_string(docs_dir.join("config.toml")).expect("docs/config.toml is required");
+    let config: Config = toml::from_str(&config_raw).expect("docs/config.toml must be valid TOML");
+
+    // Locale prefixes other than the root locale, used to split pages.
+    let locale_dirs: Vec<String> = config
+        .locales
+        .iter()
+        .filter(|l| l.prefix != "/")
+        .map(|l| l.prefix.trim_matches('/').to_string())
+        .collect();
+
+    // Collect markdown files.
+    let mut md_files: Vec<PathBuf> = Vec::new();
+    collect_md(&docs_dir, &mut md_files);
+    md_files.sort();
+
+    let mut pages: Vec<Page> = Vec::new();
+    for file in &md_files {
+        pages.push(process_page(&docs_dir, file, &locale_dirs));
+    }
+
+    // Copy docs/public assets into www/ so the dev server and the build
+    // output can serve them from the site root.
+    let public_dir: PathBuf = docs_dir.join("public");
+    if public_dir.is_dir() {
+        let www_dir: PathBuf = manifest_dir.join("www");
+        copy_dir(&public_dir, &www_dir);
+    }
+
+    // Build the sidebar tree per locale (auto-generated from the file tree).
+    let mut sidebars: Vec<(String, Vec<SideItem>)> = Vec::new();
+    for locale in &config.locales {
+        let root: PathBuf = if locale.prefix == "/" {
+            docs_dir.clone()
+        } else {
+            docs_dir.join(locale.prefix.trim_matches('/'))
+        };
+        let items: Vec<SideItem> = build_sidebar(&root, &root, &locale.prefix, &pages);
+        sidebars.push((locale.prefix.clone(), items));
+    }
+
+    let code: String = codegen(&config, &pages, &sidebars);
+    fs::write(PathBuf::from(out_dir).join("docs_gen.rs"), code).expect("write docs_gen.rs");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Filesystem helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Recursively collects `*.md` files, skipping `public/`.
+fn collect_md(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path: PathBuf = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "public") {
+                continue;
+            }
+            collect_md(&path, out);
+        } else if path.extension().is_some_and(|e| e == "md") {
+            out.push(path);
+        }
+    }
+}
+
+/// Recursively copies a directory tree.
+fn copy_dir(src: &Path, dst: &Path) {
+    let Ok(entries) = fs::read_dir(src) else {
+        return;
+    };
+    let _ = fs::create_dir_all(dst);
+    for entry in entries.flatten() {
+        let path: PathBuf = entry.path();
+        let target: PathBuf = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir(&path, &target);
+        } else {
+            let _ = fs::copy(&path, &target);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Page processing
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Parses one markdown file into a [`Page`].
+fn process_page(docs_dir: &Path, file: &Path, locale_dirs: &[String]) -> Page {
+    let raw: String = fs::read_to_string(file).expect("read md");
+    let (frontmatter, body) = split_frontmatter(&raw);
+
+    let rel: &Path = file.strip_prefix(docs_dir).expect("strip docs dir");
+    let mut segments: Vec<String> = rel
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+
+    // Locale detection from the first path segment.
+    let locale: String = if let Some(first) = segments.first() {
+        if locale_dirs.contains(first) {
+            let prefix: String = format!("/{first}/");
+            segments.remove(0);
+            prefix
+        } else {
+            "/".to_string()
+        }
+    } else {
+        "/".to_string()
+    };
+
+    // Route computation (VuePress convention).
+    let route: String = route_for(&segments, &locale);
+
+    let fm_title: Option<String> = yaml_str(&frontmatter, "title");
+    let order: i64 = yaml_i64(&frontmatter, "order").unwrap_or(0);
+
+    let (blocks, headings, first_h1) = render_markdown(body, &route);
+
+    let title: String = fm_title
+        .or(first_h1)
+        .unwrap_or_else(|| prettify(stem_of(&segments)));
+
+    let home: bool = yaml_bool(&frontmatter, "home");
+    let hero_text: String = yaml_str(&frontmatter, "heroText")
+        .or_else(|| yaml_str(&frontmatter, "hero_text"))
+        .unwrap_or_default();
+    let tagline: String = yaml_str(&frontmatter, "tagline").unwrap_or_default();
+    let footer: String = yaml_str(&frontmatter, "footer").unwrap_or_default();
+
+    let actions: Vec<(String, String, String)> = yaml_list(&frontmatter, "actions")
+        .iter()
+        .map(|item| {
+            (
+                yaml_str(item, "text").unwrap_or_default(),
+                yaml_str(item, "link").unwrap_or_default(),
+                yaml_str(item, "type").unwrap_or_else(|| "primary".to_string()),
+            )
+        })
+        .collect();
+
+    let features: Vec<(String, String)> = yaml_list(&frontmatter, "features")
+        .iter()
+        .map(|item| {
+            (
+                yaml_str(item, "title").unwrap_or_default(),
+                yaml_str(item, "details").unwrap_or_default(),
+            )
+        })
+        .collect();
+
+    Page {
+        route,
+        locale,
+        title,
+        blocks,
+        headings,
+        home,
+        hero_text,
+        tagline,
+        actions,
+        features,
+        footer,
+        order,
+    }
+}
+
+/// Computes the VuePress-style route for a page.
+///
+/// - `README.md` / `index.md` → directory route with trailing slash.
+/// - `foo.md` → `/foo.html`.
+fn route_for(segments: &[String], locale: &str) -> String {
+    let stem: String = stem_of(segments);
+    let dir_parts: &[String] = if segments.is_empty() {
+        &[]
+    } else {
+        &segments[..segments.len() - 1]
+    };
+    let dir_path: String = if dir_parts.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", dir_parts.join("/"))
+    };
+    if stem == "README" || stem == "index" {
+        let base: String = format!("/{dir_path}");
+        join_locale_route(locale, &base)
+    } else {
+        let base: String = format!("/{dir_path}{stem}.html");
+        join_locale_route(locale, &base)
+    }
+}
+
+/// Joins a locale prefix with a base route.
+fn join_locale_route(locale: &str, base: &str) -> String {
+    if locale == "/" {
+        base.to_string()
+    } else {
+        format!("{}{}", locale.trim_end_matches('/'), base)
+    }
+}
+
+/// Returns the file stem of the last segment.
+fn stem_of(segments: &[String]) -> String {
+    segments
+        .last()
+        .map(|s| s.trim_end_matches(".md").to_string())
+        .unwrap_or_default()
+}
+
+/// Converts a file/dir name into a human title (`getting-started` → `Getting Started`).
+fn prettify(name: String) -> String {
+    let mut out: String = String::new();
+    let mut capitalize: bool = true;
+    for ch in name.chars() {
+        if ch == '-' || ch == '_' {
+            out.push(' ');
+            capitalize = true;
+        } else if capitalize {
+            out.extend(ch.to_uppercase());
+            capitalize = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    if out.is_empty() {
+        "Index".to_string()
+    } else {
+        out
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Frontmatter helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Splits a markdown source into (frontmatter YAML value, body).
+fn split_frontmatter(raw: &str) -> (Yaml, &str) {
+    let trimmed: &str = raw.trim_start();
+    if !trimmed.starts_with("---") {
+        return (Yaml::Null, raw);
+    }
+    let after_open: &str = &trimmed[3..];
+    let Some(after_open) = after_open.strip_prefix(['\n', '\r'].as_ref()) else {
+        return (Yaml::Null, raw);
+    };
+    let Some(end) = after_open.find("\n---") else {
+        return (Yaml::Null, raw);
+    };
+    let fm_src: &str = &after_open[..end];
+    let body: &str = &after_open[end + 4..];
+    let yaml: Yaml = serde_yaml::from_str(fm_src).unwrap_or(Yaml::Null);
+    (yaml, body)
+}
+
+/// Reads a string field from a YAML mapping.
+fn yaml_str(value: &Yaml, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Reads an i64 field from a YAML mapping.
+fn yaml_i64(value: &Yaml, key: &str) -> Option<i64> {
+    value.get(key).and_then(|v| v.as_i64())
+}
+
+/// Reads a bool field from a YAML mapping.
+fn yaml_bool(value: &Yaml, key: &str) -> bool {
+    value.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Reads a list field from a YAML mapping.
+fn yaml_list<'a>(value: &'a Yaml, key: &str) -> &'a [Yaml] {
+    value
+        .get(key)
+        .and_then(|v| v.as_sequence())
+        .map(|s| s.as_slice())
+        .unwrap_or(&[])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Markdown → AST (VuePress-flavored subset)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Renders markdown source into a block AST, extracting headings + first h1.
+fn render_markdown(body: &str, route: &str) -> (Vec<Block>, Vec<Heading>, Option<String>) {
+    let segments: Vec<Segment> = split_containers(body);
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut headings: Vec<Heading> = Vec::new();
+    let mut first_h1: Option<String> = None;
+    let mut used_slugs: HashSet<String> = HashSet::new();
+
+    for segment in segments {
+        match segment {
+            Segment::Markdown(src) => {
+                let mut ctx: ParseCtx = ParseCtx {
+                    route,
+                    headings: &mut headings,
+                    first_h1: &mut first_h1,
+                    used_slugs: &mut used_slugs,
+                };
+                blocks.extend(parse_blocks(&src, &mut ctx));
+            }
+            Segment::Container { kind, title, body } => {
+                let mut ctx: ParseCtx = ParseCtx {
+                    route,
+                    headings: &mut headings,
+                    first_h1: &mut first_h1,
+                    used_slugs: &mut used_slugs,
+                };
+                let inner: Vec<Block> = parse_blocks(&body, &mut ctx);
+                blocks.push(Block::Container {
+                    title: title.unwrap_or_else(|| kind.to_uppercase()),
+                    kind,
+                    blocks: inner,
+                });
+            }
+        }
+    }
+    (blocks, headings, first_h1)
+}
+
+/// Shared mutable parse state.
+struct ParseCtx<'a> {
+    /// Current page route (for link rewriting).
+    route: &'a str,
+    /// TOC sink.
+    headings: &'a mut Vec<Heading>,
+    /// First h1 text sink.
+    first_h1: &'a mut Option<String>,
+    /// Slug dedup set.
+    used_slugs: &'a mut HashSet<String>,
+}
+
+/// A source segment: plain markdown or a `:::` custom container.
+enum Segment {
+    /// Plain markdown.
+    Markdown(String),
+    /// `::: kind [title]` container.
+    Container {
+        /// Container kind (tip / warning / danger / …).
+        kind: String,
+        /// Optional custom title.
+        title: Option<String>,
+        /// Raw markdown body.
+        body: String,
+    },
+}
+
+/// Splits source into markdown / container segments (containers do not nest).
+fn split_containers(src: &str) -> Vec<Segment> {
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut buf: String = String::new();
+    let mut in_container: bool = false;
+    let mut kind: String = String::new();
+    let mut title: Option<String> = None;
+    let mut body: String = String::new();
+
+    for line in src.lines() {
+        let trimmed: &str = line.trim_end();
+        if !in_container && trimmed.starts_with(":::") {
+            let rest: &str = trimmed[3..].trim();
+            if rest.is_empty() {
+                // Stray `:::` — treat as plain text.
+                buf.push_str(line);
+                buf.push('\n');
+                continue;
+            }
+            if !buf.trim().is_empty() {
+                segments.push(Segment::Markdown(std::mem::take(&mut buf)));
+            } else {
+                buf.clear();
+            }
+            let mut parts = rest.splitn(2, char::is_whitespace);
+            kind = parts.next().unwrap_or("info").to_string();
+            title = parts
+                .next()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string);
+            in_container = true;
+            body.clear();
+            continue;
+        }
+        if in_container && trimmed == ":::" {
+            segments.push(Segment::Container {
+                kind: std::mem::take(&mut kind),
+                title: title.take(),
+                body: std::mem::take(&mut body),
+            });
+            in_container = false;
+            continue;
+        }
+        if in_container {
+            body.push_str(line);
+            body.push('\n');
+        } else {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    if in_container {
+        // Unterminated container — emit as markdown.
+        buf.push_str(&format!("::: {kind}\n{body}"));
+    }
+    if !buf.trim().is_empty() {
+        segments.push(Segment::Markdown(buf));
+    }
+    segments
+}
+
+/// Which block-level end tag terminates the current parse frame.
+#[derive(Clone, Copy, PartialEq)]
+enum EndCtx {
+    /// Top level (never ends early).
+    Top,
+    /// `BlockQuote`.
+    Quote,
+    /// `Item` (list item).
+    Item,
+}
+
+/// Parses a block sequence until the matching end tag.
+fn parse_blocks(src: &str, ctx: &mut ParseCtx) -> Vec<Block> {
+    let options: Options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_HEADING_ATTRIBUTES;
+    let events: VecDeque<Event> = Parser::new_ext(src, options).collect();
+    let mut iter = events.into_iter().peekable();
+    parse_block_stream(&mut iter, ctx, EndCtx::Top)
+}
+
+/// The peekable event iterator type used across the parser.
+type EventIter<'a> = std::iter::Peekable<std::collections::vec_deque::IntoIter<Event<'a>>>;
+
+/// Whether an event starts an inline run (tight list items have no
+/// paragraph wrapper, so inline events can appear at block level).
+fn is_inline_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Text(_)
+            | Event::Code(_)
+            | Event::TaskListMarker(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::InlineHtml(_)
+            | Event::FootnoteReference(_)
+            | Event::Start(
+                Tag::Strong
+                    | Tag::Emphasis
+                    | Tag::Strikethrough
+                    | Tag::Link { .. }
+                    | Tag::Image { .. }
+            )
+    )
+}
+
+/// Core block-stream parser.
+fn parse_block_stream(it: &mut EventIter, ctx: &mut ParseCtx, end: EndCtx) -> Vec<Block> {
+    let mut blocks: Vec<Block> = Vec::new();
+    while let Some(event) = it.next() {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                let inline: Vec<Inline> = parse_inlines(it, ctx, true);
+                let text: String = inline_plain_text(&inline);
+                let slug: String = unique_slug(&slugify(&text), ctx.used_slugs);
+                let n: u8 = heading_level_num(level);
+                if n == 2 || n == 3 {
+                    ctx.headings.push(Heading {
+                        level: n,
+                        id: slug.clone(),
+                        text: text.clone(),
+                    });
+                }
+                if n == 1 && ctx.first_h1.is_none() {
+                    *ctx.first_h1 = Some(text);
+                }
+                blocks.push(Block::Heading {
+                    level: n,
+                    href: format!("#{}#{}", ctx.route, slug),
+                    id: slug,
+                    inline,
+                });
+            }
+            Event::Start(Tag::Paragraph) => {
+                let inline: Vec<Inline> = parse_inlines(it, ctx, true);
+                blocks.push(Block::Paragraph(inline));
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let lang: String = match &kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    pulldown_cmark::CodeBlockKind::Indented => String::new(),
+                };
+                let mut code: String = String::new();
+                for ev in &mut *it {
+                    match ev {
+                        Event::Text(text) => code.push_str(&text),
+                        Event::End(TagEnd::CodeBlock) => break,
+                        _ => {}
+                    }
+                }
+                blocks.push(Block::CodeBlock { lang, code });
+            }
+            Event::Start(Tag::BlockQuote(_)) => {
+                let inner: Vec<Block> = parse_block_stream(it, ctx, EndCtx::Quote);
+                blocks.push(Block::BlockQuote(inner));
+            }
+            Event::Start(Tag::List(first)) => {
+                let ordered: bool = first.is_some();
+                let mut items: Vec<Vec<Block>> = Vec::new();
+                loop {
+                    match it.next() {
+                        Some(Event::Start(Tag::Item)) => {
+                            items.push(parse_block_stream(it, ctx, EndCtx::Item));
+                        }
+                        Some(Event::End(TagEnd::List(_))) | None => break,
+                        _ => {}
+                    }
+                }
+                blocks.push(Block::List { ordered, items });
+            }
+            Event::Start(Tag::Table(_alignments)) => {
+                let mut head: Vec<Vec<Inline>> = Vec::new();
+                let mut rows: Vec<Vec<Vec<Inline>>> = Vec::new();
+                loop {
+                    match it.next() {
+                        Some(Event::Start(Tag::TableHead)) => {
+                            head = parse_table_row(it, ctx);
+                        }
+                        Some(Event::Start(Tag::TableRow)) => {
+                            rows.push(parse_table_row(it, ctx));
+                        }
+                        Some(Event::End(TagEnd::Table)) | None => break,
+                        _ => {}
+                    }
+                }
+                blocks.push(Block::Table { head, rows });
+            }
+            Event::Rule => blocks.push(Block::Rule),
+            Event::Html(html) | Event::InlineHtml(html) => {
+                blocks.push(Block::Html(html.to_string()));
+            }
+            Event::Start(Tag::FootnoteDefinition(name)) => {
+                let mut inner: Vec<Block> = parse_block_stream(it, ctx, EndCtx::Top);
+                // Prefix the definition name as a plain paragraph.
+                inner.insert(
+                    0,
+                    Block::Paragraph(vec![Inline::Text(format!("[^{name}]"))]),
+                );
+                blocks.push(Block::BlockQuote(inner));
+            }
+            Event::End(tag_end) => {
+                let matches_end: bool = match (end, tag_end) {
+                    (EndCtx::Quote, TagEnd::BlockQuote(_)) => true,
+                    (EndCtx::Item, TagEnd::Item) => true,
+                    _ => false,
+                };
+                if matches_end {
+                    break;
+                }
+            }
+            other if is_inline_event(&other) => {
+                // Tight list item (or loose inline run): collect inlines
+                // without consuming the terminating block end tag.
+                let mut inlines: Vec<Inline> = Vec::new();
+                collect_inline(it, ctx, other, &mut inlines);
+                inlines.extend(parse_inlines(it, ctx, false));
+                blocks.push(Block::Paragraph(inlines));
+            }
+            _ => {}
+        }
+    }
+    blocks
+}
+
+/// Parses one table row (head or body) into a vector of cell inlines.
+fn parse_table_row(it: &mut EventIter, ctx: &mut ParseCtx) -> Vec<Vec<Inline>> {
+    let mut cells: Vec<Vec<Inline>> = Vec::new();
+    loop {
+        match it.next() {
+            Some(Event::Start(Tag::TableCell)) => {
+                cells.push(parse_inlines(it, ctx, true));
+            }
+            Some(Event::End(TagEnd::TableHead | TagEnd::TableRow)) | None => break,
+            _ => {}
+        }
+    }
+    cells
+}
+
+/// Parses an inline sequence until the current block-level end tag.
+///
+/// When `consume_end` is false the terminating `End` event is left on the
+/// iterator (used for tight list items whose inline run ends at `End(Item)`).
+fn parse_inlines(it: &mut EventIter, ctx: &mut ParseCtx, consume_end: bool) -> Vec<Inline> {
+    let mut inlines: Vec<Inline> = Vec::new();
+    loop {
+        match it.peek() {
+            Some(Event::End(_)) => {
+                if consume_end {
+                    it.next();
+                }
+                break;
+            }
+            None => break,
+            _ => {}
+        }
+        let event: Event = it.next().expect("peeked");
+        collect_inline(it, ctx, event, &mut inlines);
+    }
+    inlines
+}
+
+/// Converts one event into inline nodes, recursing for container tags.
+fn collect_inline(it: &mut EventIter, ctx: &mut ParseCtx, event: Event, inlines: &mut Vec<Inline>) {
+    match event {
+        Event::Text(text) => inlines.push(Inline::Text(text.to_string())),
+        Event::Code(code) => inlines.push(Inline::Code(code.to_string())),
+        Event::Start(Tag::Strong) => {
+            inlines.push(Inline::Strong(parse_inlines(it, ctx, true)));
+        }
+        Event::Start(Tag::Emphasis) => {
+            inlines.push(Inline::Em(parse_inlines(it, ctx, true)));
+        }
+        Event::Start(Tag::Strikethrough) => {
+            inlines.push(Inline::Del(parse_inlines(it, ctx, true)));
+        }
+        Event::Start(Tag::Link { dest_url, .. }) => {
+            let (href, external) = rewrite_link(&dest_url, ctx.route);
+            inlines.push(Inline::Link {
+                href,
+                external,
+                children: parse_inlines(it, ctx, true),
+            });
+        }
+        Event::Start(Tag::Image { dest_url, .. }) => {
+            let alt_inlines: Vec<Inline> = parse_inlines(it, ctx, true);
+            inlines.push(Inline::Image {
+                src: dest_url.to_string(),
+                alt: inline_plain_text(&alt_inlines),
+            });
+        }
+        Event::TaskListMarker(checked) => inlines.push(Inline::TaskMarker(checked)),
+        Event::FootnoteReference(name) => {
+            inlines.push(Inline::Text(format!("[^{name}]")));
+        }
+        Event::SoftBreak => inlines.push(Inline::SoftBreak),
+        Event::HardBreak => inlines.push(Inline::HardBreak),
+        Event::InlineHtml(html) => inlines.push(Inline::Html(html.to_string())),
+        _ => {}
+    }
+}
+
+/// Extracts plain text from inline nodes.
+fn inline_plain_text(inlines: &[Inline]) -> String {
+    let mut text: String = String::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text(t) | Inline::Code(t) => text.push_str(t),
+            Inline::Strong(children) | Inline::Em(children) | Inline::Del(children) => {
+                text.push_str(&inline_plain_text(children));
+            }
+            Inline::Link { children, .. } => text.push_str(&inline_plain_text(children)),
+            Inline::SoftBreak | Inline::HardBreak => text.push(' '),
+            _ => {}
+        }
+    }
+    text.trim().to_string()
+}
+
+/// Converts a heading level enum to a number.
+fn heading_level_num(level: HeadingLevel) -> u8 {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
+    }
+}
+
+/// Slugifies heading text (keeps CJK characters, VuePress-style).
+fn slugify(text: &str) -> String {
+    let mut out: String = String::new();
+    let mut last_dash: bool = false;
+    for ch in text.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "section".to_string()
+    } else {
+        out
+    }
+}
+
+/// Ensures slug uniqueness within a page.
+fn unique_slug(base: &str, used: &mut HashSet<String>) -> String {
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let mut i: usize = 2;
+    loop {
+        let candidate: String = format!("{base}-{i}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+
+/// Rewrites a markdown link target into a site URL.
+///
+/// Returns `(href, external)` where internal hrefs carry the `#` hash-router
+/// prefix (plus an optional `#anchor` suffix).
+fn rewrite_link(dest: &str, route: &str) -> (String, bool) {
+    if dest.starts_with("http://") || dest.starts_with("https://") || dest.starts_with("mailto:") {
+        return (dest.to_string(), true);
+    }
+    if let Some(anchor) = dest.strip_prefix('#') {
+        return (format!("#{route}#{anchor}"), false);
+    }
+    let (path_part, anchor_part) = match dest.split_once('#') {
+        Some((p, a)) => (p, Some(a)),
+        None => (dest, None),
+    };
+    let mut href: String = if path_part.ends_with(".md") || path_part.ends_with(".md/") {
+        let resolved: String = resolve_relative(route, path_part);
+        format!("#{resolved}")
+    } else if path_part.starts_with('/') {
+        // Site-root-absolute link: map into the hash router.
+        format!("#{path_part}")
+    } else {
+        // Non-markdown relative link (asset) — leave untouched.
+        dest.to_string()
+    };
+    if let Some(anchor) = anchor_part {
+        if path_part.ends_with(".md") || path_part.starts_with('/') {
+            href = format!("{href}#{anchor}");
+        }
+    }
+    (href, false)
+}
+
+/// Resolves a relative markdown path against the current page route.
+fn resolve_relative(route: &str, rel: &str) -> String {
+    let rel: &str = rel.trim_end_matches('/');
+    let mut stack: Vec<String> = Vec::new();
+    if let Some(stripped) = rel.strip_prefix('/') {
+        for seg in stripped.split('/') {
+            stack.push(seg.to_string());
+        }
+        return md_path_to_route(&format!("/{}", stack.join("/")));
+    }
+    // Directory of the current page route.
+    let dir: &str = if route.ends_with('/') {
+        route
+    } else {
+        match route.rfind('/') {
+            Some(idx) => &route[..=idx],
+            None => "/",
+        }
+    };
+    for seg in dir.trim_matches('/').split('/') {
+        if !seg.is_empty() {
+            stack.push(seg.to_string());
+        }
+    }
+    for seg in rel.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                stack.pop();
+            }
+            s => stack.push(s.to_string()),
+        }
+    }
+    md_path_to_route(&format!("/{}", stack.join("/")))
+}
+
+/// Converts a markdown path (`/guide/foo.md`) to a route (`/guide/foo.html`).
+fn md_path_to_route(path: &str) -> String {
+    let path: &str = path.trim_end_matches('/');
+    if path.ends_with("README.md") || path.ends_with("index.md") {
+        let dir: &str = &path[..path.rfind('/').unwrap_or(0) + 1];
+        return dir.to_string();
+    }
+    if let Some(stripped) = path.strip_suffix(".md") {
+        return format!("{stripped}.html");
+    }
+    path.to_string()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sidebar generation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Recursively builds the sidebar tree for one locale directory.
+fn build_sidebar(dir: &Path, locale_root: &Path, locale: &str, pages: &[Page]) -> Vec<SideItem> {
+    let mut items: Vec<SideItem> = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return items;
+    };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+
+    for path in entries {
+        let name: String = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if path.is_dir() {
+            if name == "public" {
+                continue;
+            }
+            let children: Vec<SideItem> = build_sidebar(&path, locale_root, locale, pages);
+            if children.is_empty() {
+                continue;
+            }
+            // Group title + optional index link from the directory README.
+            let rel_segments: Vec<String> = path
+                .strip_prefix(locale_root)
+                .map(|p| {
+                    p.components()
+                        .filter_map(|c| match c {
+                            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                            _ => None,
+                        })
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            let mut segs: Vec<String> = rel_segments;
+            segs.push("README.md".to_string());
+            let readme_route: String = route_for(&segs, locale);
+            let readme_page: Option<&Page> = pages
+                .iter()
+                .find(|p| p.route == readme_route && p.locale == locale);
+            let (text, link) = match readme_page {
+                Some(page) => (page.title.clone(), Some(page.route.clone())),
+                None => (prettify(name), None),
+            };
+            items.push(SideItem {
+                text,
+                link,
+                children,
+            });
+        } else if name.ends_with(".md") && name != "README.md" && name != "index.md" {
+            let rel_segments: Vec<String> = path
+                .strip_prefix(locale_root)
+                .map(|p| {
+                    p.components()
+                        .filter_map(|c| match c {
+                            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                            _ => None,
+                        })
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            let route: String = route_for(&rel_segments, locale);
+            let Some(page) = pages
+                .iter()
+                .find(|p| p.route == route && p.locale == locale)
+            else {
+                continue;
+            };
+            items.push(SideItem {
+                text: page.title.clone(),
+                link: Some(route),
+                children: Vec::new(),
+            });
+        }
+    }
+
+    // Sort: frontmatter `order` first, then alphabetical.
+    let order_of = |item: &SideItem| -> i64 {
+        item.link
+            .as_ref()
+            .and_then(|route| {
+                pages
+                    .iter()
+                    .find(|p| &p.route == route && p.locale == locale)
+            })
+            .map(|p| p.order)
+            .unwrap_or(0)
+    };
+    items.sort_by(|a, b| {
+        order_of(a)
+            .cmp(&order_of(b))
+            .then_with(|| a.text.cmp(&b.text))
+    });
+    items
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Code generation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Emits the generated Rust source.
+fn codegen(config: &Config, pages: &[Page], sidebars: &[(String, Vec<SideItem>)]) -> String {
+    let mut code: String = String::new();
+    code.push_str(
+        "// @generated by build.rs — do not edit.\n//\n// Constructed from docs/config.toml and docs/**/*.md at build time.\n\n",
+    );
+
+    // Pages.
+    let mut pages_code: String = String::new();
+    for page in pages {
+        let headings: String = page
+            .headings
+            .iter()
+            .map(|h| {
+                format!(
+                    "crate::data::DocsHeading {{ level: {}, id: {:?}, text: {:?} }}",
+                    h.level, h.id, h.text
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        let actions: String = page
+            .actions
+            .iter()
+            .map(|(text, link, kind)| {
+                format!(
+                    "crate::data::DocsAction {{ text: {:?}, link: {:?}, kind: {:?} }}",
+                    text, link, kind
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        let features: String = page
+            .features
+            .iter()
+            .map(|(title, details)| {
+                format!(
+                    "crate::data::DocsFeature {{ title: {:?}, details: {:?} }}",
+                    title, details
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        let blocks: String = emit_blocks(&page.blocks);
+        pages_code.push_str(&format!(
+            "crate::data::DocsPage {{ route: {:?}, locale: {:?}, title: {:?}, blocks: {}, headings: &[{}], home: {}, hero_text: {:?}, tagline: {:?}, actions: &[{}], features: &[{}], footer: {:?} }},\n",
+            page.route,
+            page.locale,
+            page.title,
+            blocks,
+            headings,
+            page.home,
+            page.hero_text,
+            page.tagline,
+            actions,
+            features,
+            page.footer,
+        ));
+    }
+
+    // Locales (with sidebars).
+    let mut locales_code: String = String::new();
+    for locale in &config.locales {
+        let sidebar_src: &Vec<SideItem> = sidebars
+            .iter()
+            .find(|(prefix, _)| prefix == &locale.prefix)
+            .map(|(_, items)| items)
+            .expect("sidebar for locale");
+        let navbar: String = locale
+            .navbar
+            .as_ref()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        format!(
+                            "crate::data::DocsNavItem {{ text: {:?}, link: {:?} }}",
+                            item.text, item.link
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let sidebar_code: String = emit_sidebar(sidebar_src);
+        locales_code.push_str(&format!(
+            "crate::data::DocsLocale {{ prefix: {:?}, lang: {:?}, label: {:?}, title: {:?}, description: {:?}, footer: {:?}, toc_label: {:?}, prev_label: {:?}, next_label: {:?}, navbar: &[{}], sidebar: {} }},\n",
+            locale.prefix,
+            locale.lang,
+            locale.label,
+            locale.title.clone().unwrap_or_default(),
+            locale.description.clone().unwrap_or_default(),
+            locale.footer.clone().unwrap_or_default(),
+            locale
+                .toc_label
+                .clone()
+                .unwrap_or_else(|| "On this page".to_string()),
+            locale
+                .prev_label
+                .clone()
+                .unwrap_or_else(|| "Previous".to_string()),
+            locale
+                .next_label
+                .clone()
+                .unwrap_or_else(|| "Next".to_string()),
+            navbar,
+            sidebar_code,
+        ));
+    }
+
+    code.push_str(&format!(
+        "/// The generated site model.\npub static SITE: crate::data::DocsSite = crate::data::DocsSite {{\n    title: {:?},\n    description: {:?},\n    logo: {:?},\n    locales: &[{}],\n    pages: &[{}],\n}};\n",
+        config.site.title,
+        config.site.description.clone().unwrap_or_default(),
+        config.site.logo.clone().unwrap_or_else(|| "📘".to_string()),
+        locales_code,
+        pages_code,
+    ));
+    code
+}
+
+/// Emits a `&'static [DocsBlock]` expression.
+fn emit_blocks(blocks: &[Block]) -> String {
+    let inner: String = blocks
+        .iter()
+        .map(|block| match block {
+            Block::Heading {
+                level,
+                id,
+                href,
+                inline,
+            } => format!(
+                "crate::data::DocsBlock::Heading {{ level: {level}, id: {id:?}, href: {href:?}, inline: {} }}",
+                emit_inlines(inline)
+            ),
+            Block::Paragraph(inline) => {
+                format!("crate::data::DocsBlock::Paragraph({})", emit_inlines(inline))
+            }
+            Block::CodeBlock { lang, code } => {
+                format!("crate::data::DocsBlock::CodeBlock {{ lang: {lang:?}, code: {code:?} }}")
+            }
+            Block::BlockQuote(inner) => {
+                format!("crate::data::DocsBlock::BlockQuote({})", emit_blocks(inner))
+            }
+            Block::List { ordered, items } => {
+                let items_code: String = items
+                    .iter()
+                    .map(|item| emit_blocks(item))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!(
+                    "crate::data::DocsBlock::List {{ ordered: {ordered}, items: &[{items_code}] }}"
+                )
+            }
+            Block::Table { head, rows } => {
+                let head_code: String = head
+                    .iter()
+                    .map(|cell| emit_inlines(cell))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                let rows_code: String = rows
+                    .iter()
+                    .map(|row| {
+                        let cells: String = row
+                            .iter()
+                            .map(|cell| emit_inlines(cell))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        format!("&[{cells}]")
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!(
+                    "crate::data::DocsBlock::Table {{ head: &[{head_code}], rows: &[{rows_code}] }}"
+                )
+            }
+            Block::Container {
+                kind,
+                title,
+                blocks,
+            } => format!(
+                "crate::data::DocsBlock::Container {{ kind: {kind:?}, title: {title:?}, blocks: {} }}",
+                emit_blocks(blocks)
+            ),
+            Block::Rule => "crate::data::DocsBlock::Rule".to_string(),
+            Block::Html(html) => format!("crate::data::DocsBlock::Html({html:?})"),
+        })
+        .collect::<Vec<String>>()
+        .join(", ");
+    format!("&[{inner}]")
+}
+
+/// Emits a `&'static [DocsInline]` expression.
+fn emit_inlines(inlines: &[Inline]) -> String {
+    let inner: String = inlines
+        .iter()
+        .map(|inline| match inline {
+            Inline::Text(text) => format!("crate::data::DocsInline::Text({text:?})"),
+            Inline::Strong(children) => {
+                format!("crate::data::DocsInline::Strong({})", emit_inlines(children))
+            }
+            Inline::Em(children) => {
+                format!("crate::data::DocsInline::Em({})", emit_inlines(children))
+            }
+            Inline::Del(children) => {
+                format!("crate::data::DocsInline::Del({})", emit_inlines(children))
+            }
+            Inline::Code(code) => format!("crate::data::DocsInline::Code({code:?})"),
+            Inline::Link {
+                href,
+                external,
+                children,
+            } => format!(
+                "crate::data::DocsInline::Link {{ href: {href:?}, external: {external}, children: {} }}",
+                emit_inlines(children)
+            ),
+            Inline::Image { src, alt } => {
+                format!("crate::data::DocsInline::Image {{ src: {src:?}, alt: {alt:?} }}")
+            }
+            Inline::TaskMarker(checked) => {
+                format!("crate::data::DocsInline::TaskMarker({checked})")
+            }
+            Inline::SoftBreak => "crate::data::DocsInline::SoftBreak".to_string(),
+            Inline::HardBreak => "crate::data::DocsInline::HardBreak".to_string(),
+            Inline::Html(html) => format!("crate::data::DocsInline::Html({html:?})"),
+        })
+        .collect::<Vec<String>>()
+        .join(", ");
+    format!("&[{inner}]")
+}
+
+/// Recursively emits a sidebar slice expression.
+fn emit_sidebar(items: &[SideItem]) -> String {
+    let inner: String = items
+        .iter()
+        .map(|item| {
+            let link: String = match &item.link {
+                Some(route) => format!("Some({route:?})"),
+                None => "None".to_string(),
+            };
+            let children: String = emit_sidebar(&item.children);
+            format!(
+                "crate::data::DocsSidebarItem {{ text: {:?}, link: {}, children: {} }}",
+                item.text, link, children
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(", ");
+    format!("&[{inner}]")
+}
