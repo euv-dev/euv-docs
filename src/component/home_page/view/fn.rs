@@ -1,7 +1,8 @@
 use super::*;
 
-/// Renders the home page: hero (title / tagline / actions), features grid,
-/// optional markdown body, and the footer.
+/// Renders the home page in the euv hero style: radial glow, big title,
+/// tagline, action buttons, and a borderless feature grid — reusing the
+/// global `c_home_*` / `c_feature_*` classes from `euv-ui`.
 ///
 /// # Arguments
 ///
@@ -39,29 +40,35 @@ pub(crate) fn docs_home_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
 
     html! {
         div {
-            class: c_docs_content()
+            class: c_page_container()
             div {
-                class: c_docs_hero()
-                h1 {
-                    class: c_docs_hero_title()
-                    {
-                        hero_title
-                    }
+                class: c_home()
+                div {
+                    class: c_page_glow()
                 }
-                if { !page.tagline.is_empty() } {
-                    p {
-                        class: c_docs_hero_tagline()
+                div {
+                    class: c_home_content()
+                    h1 {
+                        class: c_home_title()
                         {
-                            page.tagline
+                            hero_title
                         }
                     }
-                }
-                if { !page.actions.is_empty() } {
-                    div {
-                        class: c_docs_hero_actions()
-                        for action in page.actions.iter() {
-                            docs_home_action {
-                                action: *action
+                    if { !page.tagline.is_empty() } {
+                        p {
+                            class: c_home_subtitle()
+                            {
+                                page.tagline
+                            }
+                        }
+                    }
+                    if { !page.actions.is_empty() } {
+                        div {
+                            class: c_home_actions()
+                            for action in page.actions.iter() {
+                                docs_home_action {
+                                    action: *action
+                                }
                             }
                         }
                     }
@@ -69,19 +76,30 @@ pub(crate) fn docs_home_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
             }
             if { !page.features.is_empty() } {
                 div {
-                    class: c_docs_features()
+                    class: c_home_feature_grid()
                     for feature in page.features.iter() {
                         div {
-                            class: c_docs_feature_card()
+                            class: c_feature_card()
                             key: feature.title
                             div {
-                                class: c_docs_feature_title()
-                                {
-                                    feature.title
+                                class: c_feature_header()
+                                if { !feature.icon.is_empty() } {
+                                    span {
+                                        class: c_feature_icon()
+                                        {
+                                            feature.icon
+                                        }
+                                    }
+                                }
+                                span {
+                                    class: c_feature_name()
+                                    {
+                                        feature.title
+                                    }
                                 }
                             }
-                            div {
-                                class: c_docs_feature_details()
+                            p {
+                                class: c_feature_desc()
                                 {
                                     feature.details
                                 }
@@ -118,7 +136,8 @@ pub(crate) struct DocsHomeActionProps {
     pub(crate) action: DocsAction,
 }
 
-/// Renders one hero action button (internal route or external URL).
+/// Renders one hero action button (internal route or external URL) with the
+/// global `c_home_btn_primary` / `c_home_btn_secondary` classes.
 ///
 /// # Arguments
 ///
@@ -132,13 +151,16 @@ pub(crate) fn docs_home_action(node: VirtualNode<DocsHomeActionProps>) -> Virtua
     let DocsHomeActionProps { action }: DocsHomeActionProps =
         node.try_get_props().unwrap_or_default();
     let external: bool = action.link.starts_with("http");
+    let button_class: fn() -> &'static Css = if action.kind == "primary" {
+        c_home_btn_primary
+    } else {
+        c_home_btn_secondary
+    };
     if external {
         html! {
             a {
-                class: if { action.kind == "primary" } {
-                    c_docs_hero_button_primary()
-                } else {
-                    c_docs_hero_button_secondary()
+                class: {
+                    button_class()
                 }
                 href: action.link
                 target: "_blank"
@@ -151,10 +173,8 @@ pub(crate) fn docs_home_action(node: VirtualNode<DocsHomeActionProps>) -> Virtua
     } else {
         html! {
             a {
-                class: if { action.kind == "primary" } {
-                    c_docs_hero_button_primary()
-                } else {
-                    c_docs_hero_button_secondary()
+                class: {
+                    button_class()
                 }
                 href: format!("#{}", action.link)
                 onclick: Router::link_handler(action.link)

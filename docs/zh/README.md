@@ -10,11 +10,14 @@ actions:
     link: /zh/guide/
     type: secondary
 features:
-  - title: Markdown 驱动
+  - icon: 📝
+    title: Markdown 驱动
     details: 在 docs/ 下写 .md 文件即可 —— 页面、侧边栏、锚点目录全部在构建期自动生成。
-  - title: VuePress 布局
+  - icon: 🧭
+    title: VuePress 布局
     details: 首页 Hero、导航栏、多级可折叠侧边栏、右侧锚点目录、上/下一页与页脚 —— 你熟悉的布局。
-  - title: Rust + WASM
+  - icon: 🦀
+    title: Rust + WASM
     details: 整个站点是一个 euv WASM 应用 —— 响应式、可切换明暗主题、运行飞快。
 footer: MIT 许可 | 基于 euv + euv-ui 构建
 ---

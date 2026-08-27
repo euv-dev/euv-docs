@@ -1,6 +1,7 @@
 use super::*;
 
-/// Renders the 404 page for unknown routes.
+/// Renders the 404 page for unknown routes, using the global euv hero
+/// classes (`c_home` / `c_home_title` / `c_home_subtitle` / `c_home_actions`).
 ///
 /// # Arguments
 ///
@@ -16,26 +17,32 @@ pub(crate) fn docs_not_found(node: VirtualNode<DocsPageProps>) -> VirtualNode {
     let locale: &DocsLocale = locale_of(&path);
     html! {
         div {
-            class: c_docs_content()
+            class: c_page_container()
             div {
-                class: c_docs_hero()
-                h1 {
-                    class: c_docs_hero_title()
-                    "404"
-                }
-                p {
-                    class: c_docs_hero_tagline()
-                    {
-                        format!("Page not found: {path}")
-                    }
+                class: c_home()
+                div {
+                    class: c_page_glow()
                 }
                 div {
-                    class: c_docs_hero_actions()
-                    a {
-                        class: c_docs_hero_button_primary()
-                        href: format!("#{}", locale.prefix)
-                        onclick: Router::link_handler(locale.prefix)
-                        "Home"
+                    class: c_home_content()
+                    h1 {
+                        class: c_home_title()
+                        "404"
+                    }
+                    p {
+                        class: c_home_subtitle()
+                        {
+                            format!("Page not found: {path}")
+                        }
+                    }
+                    div {
+                        class: c_home_actions()
+                        a {
+                            class: c_home_btn_primary()
+                            href: format!("#{}", locale.prefix)
+                            onclick: Router::link_handler(locale.prefix)
+                            "Home"
+                        }
                     }
                 }
             }

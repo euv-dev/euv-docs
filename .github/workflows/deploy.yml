@@ -37,7 +37,7 @@ jobs:
         run: cargo install euv-cli --locked
 
       - name: Build site (euv build → www/)
-        run: euv build --release -- --target web --out-dir www/pkg --out-name euv_docs --no-typescript --no-pack --no-gitignore
+        run: euv build --release --index-html template.html -- --target web --out-dir www/pkg --out-name euv_docs --no-typescript --no-pack --no-gitignore
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

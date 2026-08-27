@@ -10,11 +10,14 @@ actions:
     link: /guide/
     type: secondary
 features:
-  - title: Markdown-driven
+  - icon: 📝
+    title: Markdown-driven
     details: Write plain .md files under docs/ — pages, sidebars, and anchor TOCs are generated automatically at build time.
-  - title: VuePress layout
+  - icon: 🧭
+    title: VuePress layout
     details: Home hero, navbar, multi-level collapsible sidebar, right anchor TOC, prev/next links, and footer — the layout you already know.
-  - title: Rust + WASM
+  - icon: 🦀
+    title: Rust + WASM
     details: The whole site is a single euv WASM app — reactive, themeable (light/dark), and fast.
 footer: MIT Licensed | Built with euv + euv-ui
 ---

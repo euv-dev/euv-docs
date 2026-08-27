@@ -2,8 +2,11 @@ use super::*;
 
 /// Renders the root application shell.
 ///
-/// Layout: fixed top navbar, fixed left sidebar (desktop), scrollable
-/// content column with right anchor TOC, and a footer.
+/// All hooks live here; the returned tree is a single reactive `if` on the
+/// current route (reading `route_signal` in the condition), which creates
+/// the root dynamic node — every nested signal read subscribes to it, so
+/// route / theme / drawer changes re-render the shell. This mirrors the
+/// official euv example's `if { mobile_signal } { ... } else { ... }` root.
 ///
 /// # Returns
 ///
@@ -20,6 +23,76 @@ pub(crate) fn app() -> VirtualNode {
     Router::use_hash_change(route_signal);
     use_anchor_scroll(route_signal);
     html! {
+        if { route_is_home(&route_signal.get()) } {
+            docs_shell {
+                route_signal
+                theme_signal
+                root_class_signal
+                drawer_open
+                locale_menu_open
+                collapsed
+                is_home: true
+            }
+        } else {
+            docs_shell {
+                route_signal
+                theme_signal
+                root_class_signal
+                drawer_open
+                locale_menu_open
+                collapsed
+                is_home: false
+            }
+        }
+    }
+}
+
+/// Returns whether the given route belongs to a home page.
+///
+/// # Arguments
+///
+/// - `&str` - The raw route string (may carry an `#anchor` suffix).
+///
+/// # Returns
+///
+/// - `bool` - True when the route resolves to a page with `home: true`.
+fn route_is_home(route: &str) -> bool {
+    let (path, _anchor) = parse_route(route);
+    find_page(&path)
+        .map(|page: &DocsPage| page.home)
+        .unwrap_or(false)
+}
+
+/// Renders the themed shell: navbar, sidebar (doc pages), main column,
+/// mobile drawer, all under the theme root classes.
+///
+/// # Arguments
+///
+/// - `DocsShellProps` - The typed props containing the shell signals.
+///
+/// # Returns
+///
+/// - `VirtualNode` - The shell virtual DOM tree.
+#[component]
+pub(crate) fn docs_shell(node: VirtualNode<DocsShellProps>) -> VirtualNode {
+    let DocsShellProps {
+        route_signal,
+        theme_signal,
+        root_class_signal,
+        drawer_open,
+        locale_menu_open,
+        collapsed,
+        is_home,
+    }: DocsShellProps = node.try_get_props().unwrap_or_default();
+    // NOTE: the aside condition must read the signal directly — a reactive
+    // `if` whose condition captures a plain `bool` prop keeps the stale
+    // closure from the first render and never updates.
+    let main_class: fn() -> &'static Css = if is_home {
+        c_docs_main_home
+    } else {
+        c_docs_main
+    };
+    html! {
         div {
             class: root_class_signal
             class: c_docs_root()
@@ -31,15 +104,17 @@ pub(crate) fn app() -> VirtualNode {
             }
             div {
                 class: c_docs_body()
-                aside {
-                    class: c_docs_sidebar()
-                    docs_sidebar_tree {
-                        route_signal
-                        collapsed
+                if { !route_is_home(&route_signal.get()) } {
+                    aside {
+                        class: c_docs_sidebar()
+                        docs_sidebar_tree {
+                            route_signal
+                            collapsed
+                        }
                     }
                 }
                 main {
-                    class: c_docs_main()
+                    class: main_class()
                     docs_main {
                         route_signal
                     }
