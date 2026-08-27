@@ -128,7 +128,7 @@ pub(crate) fn docs_sidebar_item(node: VirtualNode<DocsSidebarItemProps>) -> Virt
                     title_node
                 }
                 span {
-                    class: { arrow_class() }
+                    class: arrow_class()
                     "▸"
                 }
             }

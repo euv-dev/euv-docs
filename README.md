@@ -13,10 +13,10 @@ dark mode, and i18n.
 cargo install euv-cli
 
 # dev server with hot reload
-euv run --dev --port 8080 -- --target web --out-dir www/pkg --out-name euv_docs --no-typescript --no-pack
+euv run --dev --port 8080 --index-html template.html -- --target web --out-dir www/pkg --out-name euv_docs --no-typescript --no-pack
 
 # production build → www/
-euv build --release -- --target web --out-dir www/pkg --out-name euv_docs --no-typescript --no-pack
+euv build --release --index-html template.html -- --target web --out-dir www/pkg --out-name euv_docs --no-typescript --no-pack
 ```
 
 Open <http://localhost:8080> after `euv run`.

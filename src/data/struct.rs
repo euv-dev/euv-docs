@@ -23,6 +23,8 @@ pub struct DocsAction {
 /// One feature card on the home page.
 #[derive(Clone, Copy, Debug)]
 pub struct DocsFeature {
+    /// Feature icon (emoji, optional).
+    pub icon: &'static str,
     /// Feature title.
     pub title: &'static str,
     /// Feature details.

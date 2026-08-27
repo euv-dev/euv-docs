@@ -208,7 +208,7 @@ struct Page {
     /// Hero actions.
     actions: Vec<(String, String, String)>,
     /// Feature cards.
-    features: Vec<(String, String)>,
+    features: Vec<(String, String, String)>,
     /// Frontmatter footer override.
     footer: String,
     /// Frontmatter `order` (sidebar sorting).
@@ -384,10 +384,11 @@ fn process_page(docs_dir: &Path, file: &Path, locale_dirs: &[String]) -> Page {
         })
         .collect();
 
-    let features: Vec<(String, String)> = yaml_list(&frontmatter, "features")
+    let features: Vec<(String, String, String)> = yaml_list(&frontmatter, "features")
         .iter()
         .map(|item| {
             (
+                yaml_str(item, "icon").unwrap_or_default(),
                 yaml_str(item, "title").unwrap_or_default(),
                 yaml_str(item, "details").unwrap_or_default(),
             )
@@ -1187,10 +1188,10 @@ fn codegen(config: &Config, pages: &[Page], sidebars: &[(String, Vec<SideItem>)]
         let features: String = page
             .features
             .iter()
-            .map(|(title, details)| {
+            .map(|(icon, title, details)| {
                 format!(
-                    "crate::data::DocsFeature {{ title: {:?}, details: {:?} }}",
-                    title, details
+                    "crate::data::DocsFeature {{ icon: {:?}, title: {:?}, details: {:?} }}",
+                    icon, title, details
                 )
             })
             .collect::<Vec<String>>()

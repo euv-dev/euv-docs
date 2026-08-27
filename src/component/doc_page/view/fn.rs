@@ -15,18 +15,30 @@ pub(crate) fn docs_main(node: VirtualNode<DocsPageProps>) -> VirtualNode {
     let (path, _anchor) = parse_route(&route_signal.get());
     match find_page(&path) {
         Some(page) if page.home => html! {
-            docs_home_page {
-                route_signal
+            div {
+                key: path.clone()
+                style: "display: contents"
+                docs_home_page {
+                    route_signal
+                }
             }
         },
         Some(_) => html! {
-            docs_doc_page {
-                route_signal
+            div {
+                key: path.clone()
+                style: "display: contents"
+                docs_doc_page {
+                    route_signal
+                }
             }
         },
         None => html! {
-            docs_not_found {
-                route_signal
+            div {
+                key: path.clone()
+                style: "display: contents"
+                docs_not_found {
+                    route_signal
+                }
             }
         },
     }

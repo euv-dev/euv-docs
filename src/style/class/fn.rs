@@ -26,7 +26,7 @@ class! {
         border-bottom: format!("1px solid {}", var!(border));
         background: var!(background);
         z-index: "100";
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             padding: format!("0px {}", var!(padding-main-horizontal-mobile));
         }
     }
@@ -42,14 +42,22 @@ class! {
         flex-shrink: "0";
     }
     pub(crate) c_docs_navbar_logo {
-        font-size: var!(font-2xl);
+        width: "32px";
+        height: "32px";
+        display: "flex";
+        align-items: "center";
+        justify-content: "center";
+        background: var!(accent);
+        color: var!(text-on-accent);
+        font-size: var!(font-lg);
+        flex-shrink: "0";
     }
     pub(crate) c_docs_navbar_links {
         display: "flex";
         align-items: "center";
         gap: var!(gap-section);
         margin-left: "auto";
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             display: "none";
         }
     }
@@ -77,7 +85,7 @@ class! {
         align-items: "center";
         gap: var!(gap-element);
         margin-left: var!(gap-section);
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             margin-left: "auto";
         }
     }
@@ -123,6 +131,7 @@ class! {
 
     pub(crate) c_docs_body {
         display: "flex";
+        min-width: "0px";
         padding-top: "56px";
         min-height: "100vh";
     }
@@ -135,18 +144,29 @@ class! {
         overflow-y: "auto";
         border-right: format!("1px solid {}", var!(border));
         padding: format!("{} {}", var!(space-xl), var!(space-lg));
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             display: "none";
         }
     }
     pub(crate) c_docs_main {
         flex: "1";
+        min-width: "0px";
         margin-left: "260px";
         padding: format!("{} {}", var!(space-3xl), var!(padding-main-horizontal));
         display: "flex";
         justify-content: "center";
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             margin-left: "0px";
+            padding: format!("{} {}", var!(space-xl), var!(padding-main-horizontal-mobile));
+        }
+    }
+    pub(crate) c_docs_main_home {
+        flex: "1";
+        min-width: "0px";
+        padding: format!("{} {}", var!(space-3xl), var!(padding-main-horizontal));
+        display: "flex";
+        justify-content: "center";
+        @media ((max-width: 767px)) {
             padding: format!("{} {}", var!(space-xl), var!(padding-main-horizontal-mobile));
         }
     }
@@ -154,17 +174,18 @@ class! {
         display: "flex";
         gap: var!(space-4xl);
         width: "100%";
+        min-width: "0px";
         max-width: "1080px";
     }
     pub(crate) c_docs_content {
         flex: "1";
         min-width: "0px";
-        max-width: "760px";
+        max-width: var!(content-max-width);
     }
     pub(crate) c_docs_toc {
         width: "200px";
         flex-shrink: "0";
-        media("(max-width: 1100px)") {
+        @media ((max-width: 1100px)) {
             display: "none";
         }
     }
@@ -238,9 +259,11 @@ class! {
         font-size: var!(font-sm);
         color: var!(foreground);
         cursor: "pointer";
+        transition: format!("background {} {}", var!(duration-fast), var!(ease-out));
         hover {
             background: var!(accent-muted);
             color: var!(accent);
+            box-shadow: format!("inset 4px 0px 0px {}", var!(accent));
         }
     }
     pub(crate) c_docs_sidebar_link_active {
@@ -251,88 +274,6 @@ class! {
         color: var!(text-on-accent);
         font-weight: "600";
         cursor: "pointer";
-    }
-
-    // ── Home page ───────────────────────────────────────────────────────────
-
-    pub(crate) c_docs_hero {
-        text-align: "center";
-        padding: format!("{} 0px", var!(space-7xl));
-    }
-    pub(crate) c_docs_hero_title {
-        font-size: var!(font-6xl);
-        font-weight: "800";
-        letter-spacing: "-0.03em";
-        media("(max-width: 767px)") {
-            font-size: var!(font-4xl);
-        }
-    }
-    pub(crate) c_docs_hero_tagline {
-        font-size: var!(font-xl);
-        color: var!(muted-foreground);
-        margin-top: var!(space-lg);
-        max-width: "640px";
-        margin-left: "auto";
-        margin-right: "auto";
-        media("(max-width: 767px)") {
-            font-size: var!(font-base);
-        }
-    }
-    pub(crate) c_docs_hero_actions {
-        display: "flex";
-        gap: var!(gap-component);
-        justify-content: "center";
-        margin-top: var!(space-3xl);
-        flex-wrap: "wrap";
-    }
-    pub(crate) c_docs_hero_button_primary {
-        display: "inline-flex";
-        align-items: "center";
-        padding: format!("{} {}", var!(space-sm), var!(space-2xl));
-        background: var!(accent);
-        color: var!(text-on-accent);
-        font-size: var!(font-base);
-        font-weight: "600";
-        border: "1.5px solid transparent";
-        cursor: "pointer";
-    }
-    pub(crate) c_docs_hero_button_secondary {
-        display: "inline-flex";
-        align-items: "center";
-        padding: format!("{} {}", var!(space-sm), var!(space-2xl));
-        color: var!(accent);
-        font-size: var!(font-base);
-        font-weight: "600";
-        border: format!("1.5px solid {}", var!(accent));
-        cursor: "pointer";
-    }
-    pub(crate) c_docs_features {
-        display: "grid";
-        grid-template-columns: "repeat(3, 1fr)";
-        gap: var!(gap-section);
-        margin-top: var!(space-4xl);
-        media("(max-width: 960px)") {
-            grid-template-columns: "repeat(2, 1fr)";
-        }
-        media("(max-width: 767px)") {
-            grid-template-columns: "1fr";
-        }
-    }
-    pub(crate) c_docs_feature_card {
-        border: format!("1px solid {}", var!(border));
-        padding: var!(space-xl);
-        display: "flex";
-        flex-direction: "column";
-        gap: var!(space-sm);
-    }
-    pub(crate) c_docs_feature_title {
-        font-size: var!(font-lg);
-        font-weight: "700";
-    }
-    pub(crate) c_docs_feature_details {
-        font-size: var!(font-sm);
-        color: var!(muted-foreground);
-        line-height: "1.6";
     }
 
     // ── Footer / prev-next ──────────────────────────────────────────────────
@@ -350,7 +291,7 @@ class! {
         justify-content: "space-between";
         gap: var!(gap-component);
         margin-top: var!(space-4xl);
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             flex-direction: "column";
         }
     }
@@ -401,7 +342,7 @@ class! {
         justify-content: "center";
         font-size: var!(font-xl);
         cursor: "pointer";
-        media("(max-width: 767px)") {
+        @media ((max-width: 767px)) {
             display: "flex";
         }
     }
