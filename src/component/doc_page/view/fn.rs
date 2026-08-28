@@ -44,8 +44,9 @@ pub(crate) fn docs_main(node: VirtualNode<DocsPageProps>) -> VirtualNode {
     }
 }
 
-/// Renders one documentation page: markdown body, prev/next links, footer,
-/// and the right anchor TOC.
+/// Renders one documentation page out of euv-ui components: `euv_markdown`
+/// for the body, `euv_pagination` for prev/next links, the footer and the
+/// right `euv_toc` anchor column.
 ///
 /// # Arguments
 ///
@@ -71,100 +72,42 @@ pub(crate) fn docs_doc_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
     } else {
         page.footer
     };
-    let prev_node: VirtualNode = match prev {
-        Some(item) => {
-            let link: &str = item.link.unwrap_or_default();
-            html! {
-                a {
-                    class: c_docs_prev_next_link()
-                    href: format!("#{link}")
-                    onclick: Router::link_handler(link)
-                    span {
-                        class: c_docs_prev_next_label()
-                        {
-                            locale.prev_label
-                        }
-                    }
-                    span {
-                        class: c_docs_prev_next_text()
-                        {
-                            item.text
-                        }
-                    }
-                }
-            }
-        }
-        None => html! {
-            div {
-                class: c_docs_prev_next_spacer()
-            }
-        },
-    };
-    let next_node: VirtualNode = match next {
-        Some(item) => {
-            let link: &str = item.link.unwrap_or_default();
-            html! {
-                a {
-                    class: c_docs_prev_next_link()
-                    class: c_docs_prev_next_next()
-                    href: format!("#{link}")
-                    onclick: Router::link_handler(link)
-                    span {
-                        class: c_docs_prev_next_label()
-                        {
-                            locale.next_label
-                        }
-                    }
-                    span {
-                        class: c_docs_prev_next_text()
-                        {
-                            item.text
-                        }
-                    }
-                }
-            }
-        }
-        None => html! {
-            div {
-                class: c_docs_prev_next_spacer()
-            }
-        },
-    };
 
     html! {
         div {
             class: c_docs_main_inner()
             div {
                 class: c_docs_content()
-                article {
-                    class: c_docs_md_body()
-                    class: "md-body"
-                    {
-                        render_md_blocks(page.blocks)
-                    }
+                euv_markdown {
+                    blocks: page.blocks
                 }
-                div {
-                    class: c_docs_prev_next()
-                    prev_node
-                    next_node
+                euv_pagination {
+                    prev_label: locale.prev_label
+                    next_label: locale.next_label
+                    prev: prev
+                    next: next
                 }
                 if { !footer_text.is_empty() } {
                     footer {
-                        class: c_docs_footer()
+                        class: c_euv_footer()
                         {
                             footer_text
                         }
                     }
                 }
             }
-            docs_toc {
-                route_signal
+            div {
+                class: c_docs_toc()
+                euv_toc {
+                    title: locale.toc_label
+                    items: page.headings
+                }
             }
         }
     }
 }
 
-/// Computes the prev/next sidebar leaf links around the current route.
+/// Computes the prev/next pagination entries around the current route.
 ///
 /// # Arguments
 ///
@@ -173,19 +116,28 @@ pub(crate) fn docs_doc_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
 ///
 /// # Returns
 ///
-/// - `(Option<&DocsSidebarItem>, Option<&DocsSidebarItem>)` - Prev and next.
+/// - `(Option<EuvPaginationItem>, Option<EuvPaginationItem>)` - Prev and next.
 fn prev_next(
     locale: &'static DocsLocale,
     route: &str,
-) -> (
-    Option<&'static DocsSidebarItem>,
-    Option<&'static DocsSidebarItem>,
-) {
-    let links: Vec<&'static DocsSidebarItem> = flat_sidebar_links(locale.sidebar);
-    let Some(index) = links.iter().position(|item| item.link == Some(route)) else {
+) -> (Option<EuvPaginationItem>, Option<EuvPaginationItem>) {
+    let links: Vec<&'static EuvSidebarItem> = flat_sidebar_links(locale.sidebar);
+    let to_item = |item: &'static EuvSidebarItem| -> Option<EuvPaginationItem> {
+        item.link.map(|link: &'static str| EuvPaginationItem {
+            text: item.text,
+            link,
+        })
+    };
+    let Some(index) = links
+        .iter()
+        .position(|item: &&'static EuvSidebarItem| item.link == Some(route))
+    else {
         return (None, None);
     };
-    let prev: Option<&'static DocsSidebarItem> = index.checked_sub(1).map(|i| links[i]);
-    let next: Option<&'static DocsSidebarItem> = links.get(index + 1).copied();
+    let prev: Option<EuvPaginationItem> =
+        index.checked_sub(1).and_then(|i: usize| to_item(links[i]));
+    let next: Option<EuvPaginationItem> = links
+        .get(index + 1)
+        .and_then(|item: &&'static EuvSidebarItem| to_item(item));
     (prev, next)
 }

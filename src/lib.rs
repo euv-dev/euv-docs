@@ -28,6 +28,6 @@ use crate::{component::*, style::*};
 pub fn main() {
     console_error_panic_hook::set_once();
     inject_app_global_css();
-    Css::inject_css(DOCS_MD_CSS);
+    Css::inject_css(EUV_MD_CSS);
     App::mount("#app", app);
 }

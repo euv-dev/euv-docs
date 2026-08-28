@@ -67,15 +67,13 @@ pub(crate) fn find_page(route: &str) -> Option<&'static DocsPage> {
 ///
 /// # Arguments
 ///
-/// - `&'static [DocsSidebarItem]` - The sidebar tree.
+/// - `&'static [EuvSidebarItem]` - The sidebar tree.
 ///
 /// # Returns
 ///
-/// - `Vec<&'static DocsSidebarItem>` - Leaf items with links, in display order.
-pub(crate) fn flat_sidebar_links(
-    items: &'static [DocsSidebarItem],
-) -> Vec<&'static DocsSidebarItem> {
-    let mut out: Vec<&'static DocsSidebarItem> = Vec::new();
+/// - `Vec<&'static EuvSidebarItem>` - Leaf items with links, in display order.
+pub(crate) fn flat_sidebar_links(items: &'static [EuvSidebarItem]) -> Vec<&'static EuvSidebarItem> {
+    let mut out: Vec<&'static EuvSidebarItem> = Vec::new();
     for item in items {
         if item.children.is_empty() {
             if item.link.is_some() {

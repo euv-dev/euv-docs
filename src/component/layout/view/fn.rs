@@ -63,8 +63,8 @@ fn route_is_home(route: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Renders the themed shell: navbar, sidebar (doc pages), main column,
-/// mobile drawer, all under the theme root classes.
+/// Renders the themed shell out of euv-ui components: `euv_navbar`,
+/// `euv_sidebar` (doc pages), the main column and the mobile `euv_drawer`.
 ///
 /// # Arguments
 ///
@@ -92,24 +92,47 @@ pub(crate) fn docs_shell(node: VirtualNode<DocsShellProps>) -> VirtualNode {
     } else {
         c_docs_main
     };
+    let (path, _anchor) = parse_route(&route_signal.get());
+    let locale: &DocsLocale = locale_of(&path);
+    let site: &DocsSite = &crate::generated::SITE;
+    let brand_title: &str = if locale.title.is_empty() {
+        site.title
+    } else {
+        locale.title
+    };
+    let locale_menu: VirtualNode = locale_menu_node(route_signal, locale_menu_open);
     html! {
         div {
             class: root_class_signal
             class: c_docs_root()
-            docs_navbar {
+            euv_navbar {
                 route_signal
-                theme_signal
-                drawer_open
-                locale_menu_open
+                brand_logo: site.logo
+                brand_title: brand_title
+                brand_href: locale.prefix
+                items: locale.navbar
+                drawer_open: Some(drawer_open)
+                locale_menu
+                button {
+                    class: c_euv_navbar_icon_button()
+                    title: "Toggle theme"
+                    onclick: ThemeState::toggle(theme_signal)
+                    if { theme_signal.get() == THEME_DARK } {
+                        "☀"
+                    } else {
+                        "☾"
+                    }
+                }
             }
             div {
                 class: c_docs_body()
                 if { !route_is_home(&route_signal.get()) } {
                     aside {
                         class: c_docs_sidebar()
-                        docs_sidebar_tree {
+                        euv_sidebar {
                             route_signal
                             collapsed
+                            items: locale.sidebar
                         }
                     }
                 }
@@ -120,35 +143,95 @@ pub(crate) fn docs_shell(node: VirtualNode<DocsShellProps>) -> VirtualNode {
                     }
                 }
             }
-            if { drawer_open } {
-                div {
-                    class: c_docs_mobile_overlay()
-                    onclick: close_drawer(drawer_open)
-                }
-                div {
-                    class: c_docs_mobile_drawer()
-                    class: c_docs_mobile_drawer_open()
-                    docs_sidebar_tree {
-                        route_signal
-                        collapsed
-                    }
+            euv_drawer {
+                open: drawer_open
+                euv_sidebar {
+                    route_signal
+                    collapsed
+                    items: locale.sidebar
                 }
             }
         }
     }
 }
 
-/// Closes the mobile navigation drawer.
+/// Builds the locale switcher dropdown (empty when the site has one locale).
 ///
 /// # Arguments
 ///
-/// - `Signal<bool>` - The drawer-open signal.
+/// - `Signal<String>` - The current route signal.
+/// - `Signal<bool>` - The dropdown open signal.
+///
+/// # Returns
+///
+/// - `VirtualNode` - The locale menu virtual DOM tree.
+fn locale_menu_node(route_signal: Signal<String>, locale_menu_open: Signal<bool>) -> VirtualNode {
+    let site: &DocsSite = &crate::generated::SITE;
+    if site.locales.len() <= 1 {
+        return html! {
+            ""
+        };
+    }
+    let items: Vec<EuvDropdownItem> = site
+        .locales
+        .iter()
+        .map(|target: &DocsLocale| EuvDropdownItem {
+            label: target.label,
+            value: target.prefix,
+        })
+        .collect();
+    html! {
+        euv_dropdown {
+            open: locale_menu_open
+            items: items
+            on_select: switch_locale(route_signal, locale_menu_open)
+            button {
+                class: c_euv_navbar_icon_button()
+                title: "Language"
+                onclick: toggle_menu(locale_menu_open)
+                "🌐"
+            }
+        }
+    }
+}
+
+/// Toggles the locale dropdown menu.
+///
+/// # Arguments
+///
+/// - `Signal<bool>` - The menu-open signal.
 ///
 /// # Returns
 ///
 /// - `Option<Rc<dyn Fn(Event)>>` - The click handler.
-fn close_drawer(drawer_open: Signal<bool>) -> Option<Rc<dyn Fn(Event)>> {
-    Some(Rc::new(move |_| drawer_open.set(false)))
+fn toggle_menu(menu_open: Signal<bool>) -> Option<Rc<dyn Fn(Event)>> {
+    Some(Rc::new(move |_| menu_open.set(!menu_open.get())))
+}
+
+/// Switches the current route into the locale chosen from the dropdown.
+///
+/// # Arguments
+///
+/// - `Signal<String>` - The route signal.
+/// - `Signal<bool>` - The menu-open signal (closed after switching).
+///
+/// # Returns
+///
+/// - `Option<Rc<dyn Fn(&'static str)>>` - The select handler receiving the
+///   target locale prefix.
+fn switch_locale(
+    route_signal: Signal<String>,
+    menu_open: Signal<bool>,
+) -> Option<Rc<dyn Fn(&'static str)>> {
+    Some(Rc::new(move |prefix: &'static str| {
+        let site: &DocsSite = &crate::generated::SITE;
+        let Some(target) = site.locales.iter().find(|locale| locale.prefix == prefix) else {
+            return;
+        };
+        let (path, _anchor) = parse_route(&route_signal.get());
+        menu_open.set(false);
+        Router::navigate(route_in_locale(&path, target));
+    }))
 }
 
 /// Scrolls to the in-page anchor after route changes (or to top).
