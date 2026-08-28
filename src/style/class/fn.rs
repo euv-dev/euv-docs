@@ -6,6 +6,11 @@ class! {
     // ═══════════════════════════════════════════════════════════════════════
 
     pub(crate) c_docs_root {
+        // c_app_root sets `height: 100%` (viewport-locked app shell); a docs
+        // site scrolls with the document, so the root must grow with content —
+        // otherwise its theme background stops at one viewport height and the
+        // area below renders with the default page background.
+        height: "auto";
         min-height: "100%";
         background: var!(background);
         color: var!(foreground);
