@@ -74,34 +74,16 @@ pub(crate) fn docs_doc_page(node: VirtualNode<DocsPageProps>) -> VirtualNode {
     };
 
     html! {
-        div {
-            class: c_docs_main_inner()
-            div {
-                class: c_docs_content()
-                euv_markdown {
-                    blocks: page.blocks
-                }
-                euv_pagination {
-                    prev_label: locale.prev_label
-                    next_label: locale.next_label
-                    prev: prev
-                    next: next
-                }
-                if { !footer_text.is_empty() } {
-                    footer {
-                        class: c_euv_footer()
-                        {
-                            footer_text
-                        }
-                    }
-                }
-            }
-            div {
-                class: c_docs_toc()
-                euv_toc {
-                    title: locale.toc_label
-                    items: page.headings
-                }
+        euv_doc_layout {
+            toc_title: locale.toc_label
+            toc_items: page.headings
+            prev_label: locale.prev_label
+            next_label: locale.next_label
+            prev: prev
+            next: next
+            footer: footer_text
+            euv_markdown {
+                blocks: page.blocks
             }
         }
     }

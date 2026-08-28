@@ -12,8 +12,8 @@ categories = ["web-programming"]
 publish = false
 
 [dependencies]
-euv = "0.15"
-euv-ui = "0.15"
+euv = "0.16"
+euv-ui = "0.16"
 
 [build-dependencies]
 pulldown-cmark = "0.12"
