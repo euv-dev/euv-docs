@@ -6,7 +6,6 @@
 mod component;
 mod data;
 mod router;
-mod style;
 
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/docs_gen.rs"));
@@ -21,7 +20,7 @@ use {
     router::*,
 };
 
-use crate::{component::*, style::*};
+use crate::component::*;
 
 /// WASM entry point: injects global styles and mounts the app.
 #[wasm_bindgen]

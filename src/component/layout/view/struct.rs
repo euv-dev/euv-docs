@@ -1,6 +1,6 @@
 use super::*;
 
-/// Props of the [`docs_shell`] component.
+/// Props of the docs shell components.
 #[derive(Clone, Default)]
 pub(crate) struct DocsShellProps {
     /// The current route signal.
@@ -15,6 +15,4 @@ pub(crate) struct DocsShellProps {
     pub(crate) locale_menu_open: Signal<bool>,
     /// Collapsed sidebar group keys.
     pub(crate) collapsed: Signal<Vec<String>>,
-    /// Whether the current route is a home page (hides the sidebar).
-    pub(crate) is_home: bool,
 }
