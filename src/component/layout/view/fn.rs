@@ -21,6 +21,7 @@ pub(crate) fn app() -> VirtualNode {
     let theme_signal: Signal<String> = theme_state.get_theme();
     let root_class_signal: Signal<String> = theme_state.get_root_class();
     Router::use_hash_change(route_signal);
+    Router::use_overlay_history(drawer_open, mobile_signal);
     use_anchor_scroll(route_signal);
     html! {
         if { route_is_home(&route_signal.get()) } {
@@ -149,6 +150,7 @@ pub(crate) fn docs_shell(node: VirtualNode<DocsShellProps>) -> VirtualNode {
                     route_signal
                     collapsed
                     items: locale.sidebar
+                    on_navigate: drawer_navigate()
                 }
             }
         }
@@ -231,6 +233,19 @@ fn switch_locale(
         let (path, _anchor) = parse_route(&route_signal.get());
         menu_open.set(false);
         Router::navigate(route_in_locale(&path, target));
+    }))
+}
+
+/// Drawer navigation handler: consumes the drawer's overlay history entry
+/// via `Router::overlay_back` and navigates after the popstate, so the
+/// browser history stays consistent (mirrors the euv example's mobile nav).
+///
+/// # Returns
+///
+/// - `Option<Rc<dyn Fn(&'static str)>>` - The navigation interceptor.
+fn drawer_navigate() -> Option<Rc<dyn Fn(&'static str)>> {
+    Some(Rc::new(|link: &'static str| {
+        Router::overlay_back(Some(link.to_string()));
     }))
 }
 
