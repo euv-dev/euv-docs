@@ -93,7 +93,7 @@ struct Heading {
     text: String,
 }
 
-/// A build-time block node (mirrors `crate::data::DocsBlock`).
+/// A build-time block node (mirrors `euv_ui::EuvMdBlock`).
 #[derive(Debug, Clone)]
 enum Block {
     /// Heading with slug and permalink.
@@ -147,7 +147,7 @@ enum Block {
     Html(String),
 }
 
-/// A build-time inline node (mirrors `crate::data::DocsInline`).
+/// A build-time inline node (mirrors `euv_ui::EuvMdInline`).
 #[derive(Debug, Clone)]
 enum Inline {
     /// Plain text.
@@ -1168,8 +1168,10 @@ fn codegen(config: &Config, pages: &[Page], sidebars: &[(String, Vec<SideItem>)]
             .iter()
             .map(|h| {
                 format!(
-                    "crate::data::DocsHeading {{ level: {}, id: {:?}, text: {:?} }}",
-                    h.level, h.id, h.text
+                    "euv_ui::EuvTocItem {{ level: {}, text: {:?}, href: {:?} }}",
+                    h.level,
+                    h.text,
+                    format!("#{}#{}", page.route, h.id)
                 )
             })
             .collect::<Vec<String>>()
@@ -1179,8 +1181,10 @@ fn codegen(config: &Config, pages: &[Page], sidebars: &[(String, Vec<SideItem>)]
             .iter()
             .map(|(text, link, kind)| {
                 format!(
-                    "crate::data::DocsAction {{ text: {:?}, link: {:?}, kind: {:?} }}",
-                    text, link, kind
+                    "euv_ui::EuvHeroAction {{ text: {:?}, link: {:?}, primary: {:?} }}",
+                    text,
+                    link,
+                    kind == "primary"
                 )
             })
             .collect::<Vec<String>>()
@@ -1190,7 +1194,7 @@ fn codegen(config: &Config, pages: &[Page], sidebars: &[(String, Vec<SideItem>)]
             .iter()
             .map(|(icon, title, details)| {
                 format!(
-                    "crate::data::DocsFeature {{ icon: {:?}, title: {:?}, details: {:?} }}",
+                    "euv_ui::EuvFeature {{ icon: {:?}, title: {:?}, details: {:?} }}",
                     icon, title, details
                 )
             })
@@ -1229,7 +1233,7 @@ fn codegen(config: &Config, pages: &[Page], sidebars: &[(String, Vec<SideItem>)]
                     .iter()
                     .map(|item| {
                         format!(
-                            "crate::data::DocsNavItem {{ text: {:?}, link: {:?} }}",
+                            "euv_ui::EuvNavbarItem {{ text: {:?}, link: {:?} }}",
                             item.text, item.link
                         )
                     })
@@ -1285,17 +1289,17 @@ fn emit_blocks(blocks: &[Block]) -> String {
                 href,
                 inline,
             } => format!(
-                "crate::data::DocsBlock::Heading {{ level: {level}, id: {id:?}, href: {href:?}, inline: {} }}",
+                "euv_ui::EuvMdBlock::Heading {{ level: {level}, id: {id:?}, href: {href:?}, inline: {} }}",
                 emit_inlines(inline)
             ),
             Block::Paragraph(inline) => {
-                format!("crate::data::DocsBlock::Paragraph({})", emit_inlines(inline))
+                format!("euv_ui::EuvMdBlock::Paragraph({})", emit_inlines(inline))
             }
             Block::CodeBlock { lang, code } => {
-                format!("crate::data::DocsBlock::CodeBlock {{ lang: {lang:?}, code: {code:?} }}")
+                format!("euv_ui::EuvMdBlock::CodeBlock {{ lang: {lang:?}, code: {code:?} }}")
             }
             Block::BlockQuote(inner) => {
-                format!("crate::data::DocsBlock::BlockQuote({})", emit_blocks(inner))
+                format!("euv_ui::EuvMdBlock::BlockQuote({})", emit_blocks(inner))
             }
             Block::List { ordered, items } => {
                 let items_code: String = items
@@ -1304,7 +1308,7 @@ fn emit_blocks(blocks: &[Block]) -> String {
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!(
-                    "crate::data::DocsBlock::List {{ ordered: {ordered}, items: &[{items_code}] }}"
+                    "euv_ui::EuvMdBlock::List {{ ordered: {ordered}, items: &[{items_code}] }}"
                 )
             }
             Block::Table { head, rows } => {
@@ -1326,7 +1330,7 @@ fn emit_blocks(blocks: &[Block]) -> String {
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!(
-                    "crate::data::DocsBlock::Table {{ head: &[{head_code}], rows: &[{rows_code}] }}"
+                    "euv_ui::EuvMdBlock::Table {{ head: &[{head_code}], rows: &[{rows_code}] }}"
                 )
             }
             Block::Container {
@@ -1334,11 +1338,11 @@ fn emit_blocks(blocks: &[Block]) -> String {
                 title,
                 blocks,
             } => format!(
-                "crate::data::DocsBlock::Container {{ kind: {kind:?}, title: {title:?}, blocks: {} }}",
+                "euv_ui::EuvMdBlock::Container {{ kind: {kind:?}, title: {title:?}, blocks: {} }}",
                 emit_blocks(blocks)
             ),
-            Block::Rule => "crate::data::DocsBlock::Rule".to_string(),
-            Block::Html(html) => format!("crate::data::DocsBlock::Html({html:?})"),
+            Block::Rule => "euv_ui::EuvMdBlock::Rule".to_string(),
+            Block::Html(html) => format!("euv_ui::EuvMdBlock::Html({html:?})"),
         })
         .collect::<Vec<String>>()
         .join(", ");
@@ -1350,34 +1354,34 @@ fn emit_inlines(inlines: &[Inline]) -> String {
     let inner: String = inlines
         .iter()
         .map(|inline| match inline {
-            Inline::Text(text) => format!("crate::data::DocsInline::Text({text:?})"),
+            Inline::Text(text) => format!("euv_ui::EuvMdInline::Text({text:?})"),
             Inline::Strong(children) => {
-                format!("crate::data::DocsInline::Strong({})", emit_inlines(children))
+                format!("euv_ui::EuvMdInline::Strong({})", emit_inlines(children))
             }
             Inline::Em(children) => {
-                format!("crate::data::DocsInline::Em({})", emit_inlines(children))
+                format!("euv_ui::EuvMdInline::Em({})", emit_inlines(children))
             }
             Inline::Del(children) => {
-                format!("crate::data::DocsInline::Del({})", emit_inlines(children))
+                format!("euv_ui::EuvMdInline::Del({})", emit_inlines(children))
             }
-            Inline::Code(code) => format!("crate::data::DocsInline::Code({code:?})"),
+            Inline::Code(code) => format!("euv_ui::EuvMdInline::Code({code:?})"),
             Inline::Link {
                 href,
                 external,
                 children,
             } => format!(
-                "crate::data::DocsInline::Link {{ href: {href:?}, external: {external}, children: {} }}",
+                "euv_ui::EuvMdInline::Link {{ href: {href:?}, external: {external}, children: {} }}",
                 emit_inlines(children)
             ),
             Inline::Image { src, alt } => {
-                format!("crate::data::DocsInline::Image {{ src: {src:?}, alt: {alt:?} }}")
+                format!("euv_ui::EuvMdInline::Image {{ src: {src:?}, alt: {alt:?} }}")
             }
             Inline::TaskMarker(checked) => {
-                format!("crate::data::DocsInline::TaskMarker({checked})")
+                format!("euv_ui::EuvMdInline::TaskMarker({checked})")
             }
-            Inline::SoftBreak => "crate::data::DocsInline::SoftBreak".to_string(),
-            Inline::HardBreak => "crate::data::DocsInline::HardBreak".to_string(),
-            Inline::Html(html) => format!("crate::data::DocsInline::Html({html:?})"),
+            Inline::SoftBreak => "euv_ui::EuvMdInline::SoftBreak".to_string(),
+            Inline::HardBreak => "euv_ui::EuvMdInline::HardBreak".to_string(),
+            Inline::Html(html) => format!("euv_ui::EuvMdInline::Html({html:?})"),
         })
         .collect::<Vec<String>>()
         .join(", ");
@@ -1395,7 +1399,7 @@ fn emit_sidebar(items: &[SideItem]) -> String {
             };
             let children: String = emit_sidebar(&item.children);
             format!(
-                "crate::data::DocsSidebarItem {{ text: {:?}, link: {}, children: {} }}",
+                "euv_ui::EuvSidebarItem {{ text: {:?}, link: {}, children: {} }}",
                 item.text, link, children
             )
         })
