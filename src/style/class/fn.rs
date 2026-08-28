@@ -54,23 +54,4 @@ class! {
             padding: format!("{} {}", var!(space-xl), var!(padding-main-horizontal-mobile));
         }
     }
-    pub(crate) c_docs_main_inner {
-        display: "flex";
-        gap: var!(space-4xl);
-        width: "100%";
-        min-width: "0px";
-        max-width: "1080px";
-    }
-    pub(crate) c_docs_content {
-        flex: "1";
-        min-width: "0px";
-        max-width: var!(content-max-width);
-    }
-    pub(crate) c_docs_toc {
-        width: "200px";
-        flex-shrink: "0";
-        @media ((max-width: 1100px)) {
-            display: "none";
-        }
-    }
 }
