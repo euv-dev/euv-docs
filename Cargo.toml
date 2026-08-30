@@ -12,8 +12,14 @@ categories = ["web-programming"]
 publish = false
 
 [dependencies]
-euv = "*"
-euv-ui = "*"
+# Pinned to the euv example's major version (workspace at 0.18.15) so the
+# generated CSS for `c_mobile_header`, `c_mobile_nav_drawer`, etc. matches
+# the official euv example 1:1 — required to keep the mobile nav rendering
+# consistent with the example site on phones with `viewport-fit=cover`.
+# `*` would float across 0.17 → 0.18 and silently drop the
+# `var(--euv-mobile-safe-top, 0px)` safe-area pattern that the example uses.
+euv = "0.18"
+euv-ui = "0.18"
 
 [build-dependencies]
 pulldown-cmark = "0.12"
