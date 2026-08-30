@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: [Deploy to GitHub Pages]
     types: [completed]
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
