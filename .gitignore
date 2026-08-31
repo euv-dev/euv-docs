@@ -1,3 +1,17 @@
+# Cargo build artefacts (per-target subdirectories produced by `cargo build`
+# and friends).
 /target
+
+# Generated site output (`euv build --out-dir www`).
 /www
+
+# `Cargo.lock` is intentionally NOT tracked for this crate.
+
+# `euv-docs` is a single-binary WebAssembly application built and shipped
+# from a single workspace root. There is no downstream consumer that would
+# need a reproducible Cargo.lock, so the lock file is regenerated on
+# every CI build from the Cargo.toml version constraints. This guarantees
+# the deploy always picks up the latest matching `euv` / `euv-ui` patch
+# release (e.g. `0.18.x`) without requiring a follow-up `cargo update`
+# PR every time upstream publishes a fix.
 Cargo.lock
