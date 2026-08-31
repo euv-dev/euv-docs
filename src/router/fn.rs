@@ -1,8 +1,47 @@
 use super::super::*;
 
+/// Decodes a percent-encoded anchor slug from a hash route.
+///
+/// Browser URL hash for non-ASCII characters arrives as the
+/// percent-encoded form (e.g. `%E7%8E%AF%E5%A2%83%E8%A6%81%E6%B1%82`
+/// for `环境要求`), but the heading `<h2 id="…">` elements are
+/// written in the raw UTF-8 form by `build.rs`. `getElementById`
+/// needs the raw form to match, so decode before querying.
+///
+/// Falls back to the input verbatim if decoding fails or if
+/// `js_sys` is unavailable (e.g. during a unit test outside the
+/// browser), so a malformed anchor never panics the page.
+///
+/// # Arguments
+///
+/// - `&str` - The percent-encoded anchor slug (already stripped
+///   of the leading `#`).
+///
+/// # Returns
+///
+/// - `String` - The decoded UTF-8 anchor slug, or the input
+///   unchanged if decoding fails.
+fn decode_anchor(encoded: &str) -> String {
+    if !encoded.as_bytes().contains(&b'%') {
+        // Fast path: nothing to decode, skip the FFI roundtrip.
+        return encoded.to_string();
+    }
+    match js_sys::decode_uri_component(encoded) {
+        Ok(value) => value.as_string().unwrap_or_else(|| encoded.to_string()),
+        Err(_) => encoded.to_string(),
+    }
+}
+
 /// Splits a raw route into its page path and optional in-page anchor.
 ///
 /// `/guide/a.html#install` → `("/guide/a.html", Some("install"))`.
+///
+/// The anchor is percent-decoded so that links to non-ASCII
+/// headings (e.g. `/zh/guide/getting-started.html#环境要求`) match
+/// the raw UTF-8 `id` attributes emitted by `build.rs`. Without
+/// decoding, `getElementById` returns null and the in-page
+/// scroll-to-anchor handler in `schedule_scroll` silently
+/// regresses to "back to top".
 ///
 /// # Arguments
 ///
@@ -13,7 +52,9 @@ use super::super::*;
 /// - `(String, Option<String>)` - The page path and optional anchor slug.
 pub(crate) fn parse_route(raw: &str) -> (String, Option<String>) {
     match raw.split_once('#') {
-        Some((path, anchor)) if !anchor.is_empty() => (path.to_string(), Some(anchor.to_string())),
+        Some((path, anchor)) if !anchor.is_empty() => {
+            (path.to_string(), Some(decode_anchor(anchor)))
+        }
         Some((path, _)) => (path.to_string(), None),
         None => (raw.to_string(), None),
     }
