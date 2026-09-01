@@ -29,8 +29,8 @@ pub fn main() {
     inject_app_global_css();
     Css::inject_css(EUV_MD_CSS);
     // Site-level CSS override: stop the invisible `#` anchor from
-    // occupying horizontal space next to each heading, while keeping
-    // the glyph baseline-aligned with the heading text on hover.
+    // occupying horizontal space next to each heading, and align the
+    // glyph with body text on hover.
     //
     // euv-ui's `euv_markdown` wraps every heading in
     // `<a class="header-anchor"><span>#</span></a>`. The upstream
@@ -47,20 +47,26 @@ pub fn main() {
     //
     // On this docs site the design intent is:
     //
-    // * Idle: title flush left, no phantom indent.
-    // * Hover: `#` glyph appears, baseline-aligned with the heading
-    //   text, with the project's standard `0.2em` inline gap.
+    // * Idle: title flush left at the same x as body paragraphs
+    //   below, no phantom indent.
+    // * Hover: `#` glyph appears at the heading's left edge,
+    //   touching the heading text on its baseline. The heading text
+    //   stays at the same x as the body paragraphs below, so the
+    //   whole column reads as a single left-aligned block — the `#`
+    //   is a leading inline decoration, not a margin placeholder.
     //
-    // To achieve both states without the placeholder problem, on
-    // desktop we:
+    // To achieve both states on the desktop, we:
     //
-    // * Lift it out of flow with `position: absolute; left: 0` so it
+    // * Lift the anchor out of flow with `position: absolute` so it
     //   does not push the heading text in the idle state.
-    // * Reserve space for it on hover only by animating the heading's
-    //   `padding-left` from `0` to `1.1em` (~ glyph width 0.83em +
-    //   gap 0.2em + small slack). On hover the heading content shifts
-    //   right by exactly the room the glyph needs, so the `#` and
-    //   text sit on the same baseline with a clean `0.2em` gap.
+    // * Pin the anchor at `left: -0.87em` (~ `#` glyph width + 1px slack
+    //   for the heading text's first-character side-bearing) so the
+    //   glyph's right edge sits at the heading's left edge, with the
+    //   glyph visually touching the heading text on the same baseline
+    //   and the heading text aligned with the body paragraph text below.
+    // * Keep the heading's `padding-left` at `0` so the heading text
+    //   never shifts on hover; the `#` floats in the heading's
+    //   left-margin zone without disturbing the column.
     //
     // The override is scoped to desktop only because mobile uses a
     // different mechanism (inline-flex + heading padding-left); that
@@ -72,9 +78,8 @@ pub fn main() {
     // against future selector-specificity bumps from upstream.
     Css::inject_css(
         "@media (min-width: 768px) { \
-         .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 { padding-left: 0 !important; transition: padding-left 0.15s ease-out !important; } \
-         .md-body h1:hover, .md-body h2:hover, .md-body h3:hover, .md-body h4:hover, .md-body h5:hover, .md-body h6:hover { padding-left: 1.1em !important; } \
-         .md-body .header-anchor { position: absolute !important; left: 0 !important; float: none !important; margin-left: 0 !important; padding-right: 0.2em !important; } \
+         .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 { padding-left: 0 !important; } \
+         .md-body .header-anchor { position: absolute !important; left: -0.87em !important; right: auto !important; float: none !important; margin-left: 0 !important; padding-right: 0 !important; } \
          }",
     );
     App::mount("#app", app);
