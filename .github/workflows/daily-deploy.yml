@@ -1,0 +1,39 @@
+name: Daily Deploy
+
+# Re-runs the production Pages deploy once a day so the live site picks up
+# the latest `euv` / `euv-cli` / `euv-ui` release from crates.io without
+# requiring a follow-up commit or manual dispatch.
+#
+# The actual build + deploy logic lives in `Deploy to GitHub Pages`
+# (`.github/workflows/deploy.yml`); this workflow only re-triggers it via
+# `workflow_dispatch` so any fix to the build pipeline automatically
+# benefits the daily run as well.
+#
+# Cron: 03:00 UTC daily (= 11:00 Asia/Shanghai). Outside the GitHub
+# Actions early-morning peak (00:00–01:00 UTC), and at the start of the
+# China workday so a freshly published `euv` patch from earlier that
+# morning is included.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-deploy
+  cancel-in-progress: true
+
+jobs:
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Trigger Deploy to GitHub Pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run "Deploy to GitHub Pages" --ref master
+          echo "Dispatched Deploy to GitHub Pages on master."
